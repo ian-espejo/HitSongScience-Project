@@ -1,0 +1,419 @@
+---
+output:
+  pdf_document:
+    number_sections: yes
+    latex_engine: pdflatex
+  bibliography: references.bib
+title: "PH125.9x - Capstone: Hit Song Science Project"
+runhead: "Hit Song Science Project"
+author: "Ian Espejo-Campos"
+github: "ian-espejo"
+
+abstract: "This project explores Spotify's song popularity prediction testing five machine learning techniques. The dataset comes from Kaggle's 'Data on Songs from Billboard 1999-2019', which contains the Spotify for Developers' audio features for 154,931 songs. Ten of this variables are used for the predictive model, with a binary outcome variable for Hit/No-Hit classification, according to a cut made in the discrete popularity variable. The highest accuracy was achieved by random forest (86.8%), with high sensitivity (0.99) but low specificity (0.08) in the model. \\par
+ \\textbf{Keywords:} hit song science, Spotify, machine learning, capstone, r markdown"
+
+geometry: margin = 1in
+fontawesome: yes
+fontfamily: mathpazo
+fontfamilyoptions: sc, osf
+fontsize: 11pt
+biblio-style: apsr
+linkcolor: gray
+urlcolor: gray
+---
+***
+
+# Introduction
+
+In Pachet and Roy’s paper “Hit Song Science Is Not Yet a Science”, the authors argue that a recent formulation known as “Hit Science”, aims that a cultural item’s popularity can be predicted prior to its distribution:
+
+> “More precisely, the claim is that cultural items would have specific, technical features that make them preferred by a majority of people, explaining the non uniform distribution of preferences. These features could be extracted by algorithms to entirely automate the prediction process from a given, arbitrary new item (a song or a movie scenario)” (Pachet & Roy, 2008, p. 355).
+
+Hit Song Science (HSS) could then predict if a song could get into the Billboard Hit 100 Chart, receiving a Recording Industry Association of America (RIAA) award, or winning a Grammy, based on audio features that increases the chance of rising popularity and becoming a hit. These features are the same that companies like Spotify use for their recommendation systems: track suitability for dancing, vocals content, positiveness, among others.
+
+Based on the data’s richness, [Spotify for Developers](https://developer.spotify.com/) has become a powerful option for music lovers, allowing users to download datasets with the following characteristics of their playlists' songs:
+
+* Mood
+  + *Danceability*: Describes how suitable a track is for dancing based on a combination of musical elements.
+  + *Energy*: Represents a perceptual measure of intensity and activity (fast, loud, and noisy).
+  + *Valence*: Describes the musical positiveness conveyed by a track.
+  + *Tempo*: Overall estimated tempo of a track in beats per minute (BPM).
+* Properties
+  + *Loudness*: Quality of a sound that is the primary psychological correlate of physical strength (amplitude).
+  + *Speechiness*: Detects the presence of spoken words in a track.
+  + *Instrumentalness*: Predicts whether a track contains no vocals.
+  + *Duration*: Track's time length in milliseconds.
+* Context
+  + *Acousticness*: A confidence measure of whether the track is acoustic.
+  + *Liveness*: Detects the presence of an audience in the recording (Spotify for Developers, 2020).
+
+The Spotify Web API can be used for simulating recommendations based on an own modelling: Garg (2020) calculates the variation of random songs in comparison to his personal favorite songs in order to build a “DJ Python” music playlist with a random forest regression. From the HSS view, Middlebrook and Sheik (2019) test four models on a 1.8 million hit and no-hit songs database and get an 88% accuracy to predict Billboard success using a random forest model.
+
+**The project approach** is to build a predictive model that maximizes overall accuracy by considering this ten audio features, and a calculated binary outcome that indicates `Hit = 1` if the Spotify's Popularity score (0-100) is higher or equal to `40`, based on a `154,931` song dataset from 1999 to 2019. The algorithms performed were guessing with `10%` odds, k-Nearest Neighbors (`KNN`), Generalized Linear Model (`GLM`), Linear Discriminant Analysis (`LDA`) and Random Forest (`RF`). The latest achieved the highest accuracy, but with low specificity.
+
+
+
+# Methodology
+
+As the first step, we downloaded the "Data on Songs from Billboard 1999-2019" available in Kaggle (<https://www.kaggle.com/danield2255/data-on-songs-from-billboard-19992019>), which contains eight CSV files with information on artists and awards. For this project, we will be using the 'songAttributes_1999-2019.csv' file (stored in the Documents folder). 
+
+## Data extraction
+
+```{r, message = F, warning = F}
+# Import libraries
+rm(list=ls())
+
+if(!require(tidyverse))
+  install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret))
+  install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(dplyr))
+  install.packages("dplyr", repos = "http://cran.us.r-project.org")
+if(!require(ggplot2))
+  install.packages("ggplot2", repos = "http://cran.us.r-project.org")
+if(!require(broom))
+  install.packages("broom", repos = "http://cran.us.r-project.org")
+if(!require(knitr))
+  install.packages("knitr", repos = "http://cran.us.r-project.org")
+if(!require(randomForest))
+  install.packages("randomForest", repos = "http://cran.us.r-project.org")
+
+library(tidyverse)
+library(caret)
+library(data.table)
+library(ggplot2)
+library(broom)
+library(knitr)
+library(randomForest)
+
+# Import CSV file from Documents
+songs_dataset <- read.csv("~/songAttributes_1999-2019.csv", header = T)
+```
+
+## Data description
+
+The dataset contains a list of `154,931` songs with `17` variables, including the song's name, artist and album, the audio features, and a popularity scale with values from 0 to 100.
+
+```{r, warning = F}
+dim(songs_dataset)
+
+head(songs_dataset) %>% as.tibble()
+
+summary(songs_dataset)
+```
+
+
+Notice that there are `989` artists and `9,799` albums in the dataset:
+
+```{r}
+summarize(songs_dataset,
+          unique_artist = n_distinct(Artist),
+          unique_albums = n_distinct(Album))
+```
+
+
+By Slicing the data to extract the Top 20 songs in popularity, we can see singers like Taylor Swift, Ed Sheeran, and Drake.
+```{r}
+songs_dataset %>%
+  arrange(desc(Popularity)) %>%
+  slice(1:20) %>%
+  mutate(Ranking = 1:n()) %>%
+  select(Ranking, Popularity, Name, Artist) %>%
+  kable()
+```
+
+
+## Data selection
+
+For the model we kept just the continuous features (Danceability, Energy, Loudness, Speechiness, Acousticness, Instrumentalness, Liveness, Valence, Tempo, and Duration), and the Spotify's Popularity ranking.
+```{r}
+# Variables selection
+songs_dataset <- songs_dataset %>%
+  select(Popularity, Danceability, Energy, Loudness, Speechiness, Acousticness,
+         Instrumentalness, Liveness, Valence, Tempo, Duration)
+```
+
+
+Analyzing the correlation between Popularity and the audio features, Loudness has the highest percent, and Danceability the lowest (in absolute values).
+```{r}
+# Correlation between Popularity and features
+cor(songs_dataset[ ,1],
+    songs_dataset[ ,sapply(songs_dataset, is.numeric)])
+```
+
+
+Average Popularity is `20.25`, while the standard deviation is `16.51`. This way, we can categorize `Hit` as a song with a popularity higher than the mean plus one standard deviation, which is approximately 40.
+```{r}
+# 'Hit' flag defined as songs with Popularity greater or equal to 40
+mean(songs_dataset$Popularity)
+
+sd(songs_dataset$Popularity)
+
+mean(songs_dataset$Popularity) + sd(songs_dataset$Popularity)
+
+songs_dataset <- songs_dataset %>%
+  mutate(Hit = as.factor(ifelse(Popularity < 40, 0, 1))) %>%
+  select(-Popularity) %>%
+  select(Hit, everything())
+```
+
+## Data partition
+
+Now that we have a binary outcome for prediction, and the chosen features, we can split the data in a train set with `80%` of the observations, and a test set with the remaining `20%` for validation purposes.
+```{r, warning = F}
+# Index with 0.2 of probability
+set.seed(1, sample.kind = "Rounding")
+test_index <- createDataPartition(songs_dataset$Hit,
+                                  times = 1,
+                                  p = 0.2,
+                                  list = F)
+```
+
+
+The Test Set has `30,987` rows, and the Train Set `123,944`, where `13.7%` are Hits.
+```{r}
+# Train and Test sets creation
+test_set <- songs_dataset[test_index,]
+nrow(test_set)
+
+train_set <- songs_dataset[-test_index,]
+nrow(train_set)
+
+mean(train_set$Hit == 1)
+```
+
+
+## Data visualization
+
+In order to begin with the data visualization, there's a need to explore the relationship between the audio features and their behavior with Hit Songs:
+
+* Hits are mostly all over the spectrum of energy (except near `0` values), but are more common with high levels of loudness (near `0`).
+
+```{r, message = F}
+train_set %>% ggplot(aes(Loudness, Energy, color = Hit)) +
+  geom_point() +
+  theme_update() +
+  labs(x = "Loudness", y = "Energy") +
+  ggtitle("Figure 2.1") +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_rect(fill = "white"))
+```
+
+
+* Hits tend to have higher values of Danceability, and standard Duration time.
+
+```{r, message = F}
+train_set %>% ggplot(aes(Danceability, Duration, color = Hit)) +
+  geom_point() +
+  theme_update() +
+  labs(x = "Danceability", y = "Duration") +
+  ggtitle("Figure 2.2") +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_rect(fill = "white"))
+```
+
+
+* Hits usually keep low levels of Speechness, and lower compared to Instrumentalness.
+
+```{r, message = F}
+train_set %>% ggplot(aes(Speechiness, Instrumentalness, color = Hit)) +
+  geom_point() +
+  theme_update() +
+  labs(x = "Speechiness", y = "Instrumentalness") +
+  ggtitle("Figure 2.3") +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_rect(fill = "white"))
+```
+
+
+## Data modelling
+
+The first step of this section is to run a Logistic Regressions for the Hit outcome against every feature individually. Based on this information, all the audio features have significant p-values (lower than `0.001`).
+
+```{r, message = F, warning = F}
+# Logistic Regressions
+tidy(glm(Hit ~ Danceability, data = train_set, family = binomial))
+
+tidy(glm(Hit ~ Energy, data = train_set, family = binomial))
+
+tidy(glm(Hit ~ Loudness, data = train_set, family = binomial))
+
+tidy(glm(Hit ~ Speechiness, data = train_set, family = binomial))
+
+tidy(glm(Hit ~ Acousticness, data = train_set, family = binomial))
+
+tidy(glm(Hit ~ Instrumentalness, data = train_set, family = binomial))
+
+tidy(glm(Hit ~ Liveness, data = train_set, family = binomial))
+
+tidy(glm(Hit ~ Valence, data = train_set, family = binomial))
+
+tidy(glm(Hit ~ Tempo, data = train_set, family = binomial))
+
+tidy(glm(Hit ~ Duration, data = train_set, family = binomial))
+```
+
+
+However, when running the Logistic Regression, Energy shows as not significant.
+```{r, message = F, warning = F}
+# Logistic Model
+log_model <- glm(Hit ~ ., data = train_set, family = binomial)
+
+summary(log_model)
+
+tidy(log_model, conf.int = T)
+```
+
+
+We know that the Train Set has a prevalence of `13.7%` of Hits. Based on this, we guess with a `10%` odd that a random song will be a Hit. The Guess Model got an accuracy of `0.7899`.
+```{r, message = F, warning = F}
+# Guessing Model
+p <- 0.9
+set.seed(2, sample.kind = "Rounding")
+guess <- sample(c(0,1),
+                length(test_index),
+                replace = T,
+                prob=c(p, 1-p)) %>% 
+  factor(levels = levels(test_set$Hit))
+
+mean(guess == test_set$Hit)
+```
+
+
+For the k-Nearest Neighbors model, we performed a tryout with the trainControl function, using 10-fold cross validation (10 samples with 10% of the observations each) with 25 cross validations from 3 to 51 neighbors. As we observe in the plot, the accuracy tend to stabilize as k increases (code available in R script):
+
+![train_knn_cv](/Users/ianec/Documents/train_knn_cv.png)
+
+
+We trained a `KNN` complete model comparing the number of neighbors from 27 to 35. We got a `0.8628` of accuracy with `K = 35`.
+```{r, message = F, warning = F}
+# k-Nearest Neighbor Model
+set.seed(3, sample.kind = "Rounding")
+train_knn <- train(Hit ~ .,
+                   method = "knn", 
+                   data = train_set,
+                   tuneGrid = data.frame(k = seq(27, 35, 2)))
+
+ggplot(train_knn, highlight = T)
+
+train_knn$finalModel
+
+confusionMatrix(predict(train_knn, test_set, type = "raw"),
+                test_set$Hit)$overall["Accuracy"]
+```
+
+
+The third and fourth models are GLM and LDA. The accuracy was `0.8629` approximately for both.
+```{r, message = F, warning = F}
+# Generalized Linear Model
+set.seed(2, sample.kind = "Rounding")
+train_glm <- train(Hit ~ .,
+                       method = "glm",
+                       data = train_set)
+```
+```{r, echo = F}
+train_glm
+```
+
+```{r, message = F, warning = F}
+# Linear Discriminant Analysis Model
+set.seed(2, sample.kind = "Rounding")
+train_lda <- train(Hit ~ .,
+                   method = "lda",
+                   data = train_set)
+```
+```{r, echo = F}
+train_lda
+```
+
+
+Finally, we trained a Random Forest Model, limiting the numbers of trees to grow to 100, and the sample variables from 1 to 10 (code available in R script).
+
+![train_rf_100t](/Users/ianec/Documents/train_rf_100t.png)
+
+As we can see, the `mtry` with best performance was `1`, with an accuracy of `0.8676`.
+
+
+
+# Results 
+
+As final model, we executed a Random Forest with the default 500 trees, exploring the grid of 1 to 5 variables randomly sampled.
+```{r}
+# Random Forest Model
+set.seed(5, sample.kind = "Rounding")
+train_rf <-  train(Hit ~ .,
+                   data = train_set,
+                   method = "rf",
+                   tuneGrid = data.frame(mtry = 1:5))
+
+ggplot(train_rf)
+```
+
+
+The model is a classification forest of 500 tress, keeping `mtry = 1` as the best performer.
+```{r}
+train_rf$finalModel
+```
+
+
+Duration appears as the most important variable, while Instrumentalness has `0` relevance for the model.
+```{r}
+varImp(train_rf)
+```
+
+
+The final accuracy is `0.8678801`.
+```{r}
+rf_preds <- predict(train_rf, test_set)
+
+cm <- confusionMatrix(rf_preds, test_set$Hit)
+cm$overall["Accuracy"]
+```
+
+However, reviewing the Confusion Matrix, we can observe that the specificity of the model (the proportion of negatives that are called negatives) is `0.08`. The matrix shows how `3,909` songs with high Popularity were predicted as no-hits. Sensibility (the proportion of positives that are called positives) is `0.99`.
+```{r}
+cm
+```
+
+
+
+# Conclusion
+
+Across this project, we first described Spotify's features while exploring a `155K` songs dataset from Kaggle. We perform five different machine learning techniques in order to maximize the accuracy of predicting a song's popularity based on audio characteristics. We achieved an accuracy of `0.8679` in the Random Rofest model, but the analysis also shows that the model has a high value for sensitivity (`0.99`), but a low performance on specificity (`0.08`).
+
+We can notice how our result is consisting with Middlebrook & Sheik (2019) in terms of the accuracy level and the final technique; however, it is also important to remember that the Music Industry is lead not just by the songs attributes, but also by the artist's popularity, number of followers, the record label under which the artist is signed and how much marketing investment they put into the project, as well as awards received in the past, among other factors unavailable for the audience. That's the reason why it is not surprising finding out that the audio features have power to predict odds for a song to become popular, but there is also a need to consider other music industry factors.
+
+For future works, there are many improvements we can do over the model:
+
+1. We constructed the `Hit` variable according to a cut based on the mean and standard deviation of the popularity index. It is also interesting to perform the model with other outcomes like the odds of winning an RIAA certification or a Grammy award.
+
+2. Data enrichment is important too, so it could be a good exercise to combine audio features with other information like song's release year (to see changes in listener's tastes), artist's number of followers (to see social media impact), or artist's former popular songs (to see if odds increase for a song if the performer already had x number of hits before).
+
+3. Due to software limitations, future work should consider datasets with less number of songs, or ML techniques that can be able to deal with high dimension matrices.
+
+
+
+# References
+
+* Garg, M. (2020). “Build Your Spotify Playlist Using Machine Learning”. Medium. Available in: <https://medium.com/swlh/build-spotify-playlist-using-machine-learning-45352975d2ee>
+
+* Herremans, D. (2019). "Data science for hit song prediction". Medium. Available in: <https://towardsdatascience.com/data-science-for-hit-song-prediction-32370f0759c1>
+
+* Irizarry, R. A. (2020). "Introduction to Data Science: Data Analysis and Prediction Algorithms with R". Available in: <https://rafalab.github.io/dsbook/>
+
+* Middlebrook, K. & Sheik, K. (2019). “Song Hit Prediction: Predicting Billboard Hits Using Spotify Data”. arXiv:1908.08609v2 [cs.IR] 18 Sep 2019
+
+* Pachet, F. & Roy, P. (2008). “Hit Song Science is Not yet a Science”. Proc. of Ismir ‘09, Philadelphia, pp. 355-360
+
+* Spotify for Developers. (2020). “Get Audio Features for a Track”. Available in: <https://developer.spotify.com/documentation/web-api/reference/tracks/get-audio-features/>
+
+
+
+# Appendix
+
+```{r}
+sessionInfo()
+```
